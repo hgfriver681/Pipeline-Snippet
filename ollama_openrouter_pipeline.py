@@ -193,8 +193,16 @@ class Pipeline:
         def openrouter_request(messages):
             return recording_request(messages, request_type='openrouter')
         
+        # 添加一个自定义流函数，可以在 sequence_func 中调用
+        def stream_text_to_ui(message):
+            streaming_messages = [{"role": "assistant", "content": message}]
+            request_history.append(streaming_messages)
+            request_types.append("custom_stream")
+            results.append(message)  # 在非流式模式下添加到结果
+            return message
+            
         # 执行序列函数收集所有请求和结果
-        sequence_func(recording_request, openrouter_request)
+        sequence_func(recording_request, openrouter_request, stream_text_to_ui)
         
         # 根据模式返回结果
         if not stream:
@@ -208,6 +216,12 @@ class Pipeline:
                     # 根据请求类型选择不同的 API
                     if request_type == 'openrouter':
                         lines = self._openrouter_request(messages, stream=True)
+                    elif request_type == 'custom_stream':
+                        # 處理自定義流
+                        message = messages[0]["content"]
+                        for char in message:
+                            yield f"data: {json.dumps({'choices': [{'delta': {'content': char}}]})}\n\n".encode()
+                        continue  # 跳過一般的行迭代
                     else:
                         lines = self._ollama_request(messages, stream=True)
                         
@@ -229,7 +243,7 @@ class Pipeline:
             print("######################################")
 
         # 定義請求序列 - 完全不需要關心流式/非流式實現
-        def my_sequence(request, openrouter_request):
+        def my_sequence(request, openrouter_request, stream_text_to_ui):
             # 第一個請求
             first_response = request(messages)
             
@@ -237,6 +251,89 @@ class Pipeline:
             second_messages = [{"role": "user", "content": f"根據以下結果進行晶豪料號比對: {first_response}..."}]
             second_response = request(second_messages)
             
+            #TODO 請你學習如何 stream ，以streaming顯示一個字串到UI
+            stream_text_to_ui("我正在學習如何 stream ，以streaming顯示一個字串到UI我正在學習如何 stream ，以streaming顯示一個字串到UI我正在學習如何 stream ，以streaming顯示一個字串到UI我正在學習如何 stream ，以streaming顯示一個字串到UI我正在學習如何 stream ，以streaming顯示一個字串到UI")
+
+
+            stream_text_to_ui("""# Markdown syntax guide
+
+## Headers
+
+# This is a Heading h1
+## This is a Heading h2
+###### This is a Heading h6
+
+## Emphasis
+
+*This text will be italic*  
+_This will also be italic_
+
+**This text will be bold**  
+__This will also be bold__
+
+_You **can** combine them_
+
+## Lists
+
+### Unordered
+
+* Item 1
+* Item 2
+* Item 2a
+* Item 2b
+    * Item 3a
+    * Item 3b
+
+### Ordered
+
+1. Item 1
+2. Item 2
+3. Item 3
+    1. Item 3a
+    2. Item 3b
+
+
+
+## Links
+
+You may be using [Markdown Live Preview](https://markdownlivepreview.com/).
+
+## Blockquotes
+
+> Markdown is a lightweight markup language with plain-text-formatting syntax, created in 2004 by John Gruber with Aaron Swartz.
+>
+>> Markdown is often used to format readme files, for writing messages in online discussion forums, and to create rich text using a plain text editor.
+
+## Tables
+
+| Left columns  | Right columns |
+| ------------- |:-------------:|
+| left foo      | right foo     |
+| left bar      | right bar     |
+| left baz      | right baz     |
+
+## Blocks of code
+
+```
+let message = 'Hello world';
+alert(message);
+```
+---
+
+## Inline code
+
+This web site is using `markedjs/marked`.
+                              
+Sure! Here's a simple Python code to print "Hello, World!":
+
+```python
+print("Hello, World!")
+```
+
+If you want, I can show you the same in other programming languages too. Want me to?
+""")
+
+
             # 使用 OpenRouter 進行第三個請求
             third_messages = [{"role": "user", "content": f"你是由誰開發的模型?"}]
             third_response = openrouter_request(third_messages)
