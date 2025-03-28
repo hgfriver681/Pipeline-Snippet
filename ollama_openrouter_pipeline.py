@@ -10,6 +10,8 @@ class Pipeline:
         OLLAMA_MODEL: str = "qwen2.5:latest"
         STREAM: bool = True  # Add streaming control to Valves
         OLLAMA_BASE_URL: str = "http://ollama:11434"  # Base URL for Ollama API
+        OPENROUTER_API_KEY: str = "sk-or-v1-05c....."  # Add OpenRouter API key to Valves
+        OPENROUTER_MODEL: str = "qwen/qwen2.5-vl-3b-instruct:free"  # Default OpenRouter model
         
 
     def __init__(self):
@@ -77,6 +79,80 @@ class Pipeline:
             else:
                 return error_msg
 
+    def _openrouter_request(self, messages: List[dict], stream: bool = False, model: str = None):
+        """基礎 OpenRouter API 請求函數"""
+        model = model or self.valves.OPENROUTER_MODEL
+        
+        try:
+            url = "https://openrouter.ai/api/v1/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {self.valves.OPENROUTER_API_KEY}",
+                "Content-Type": "application/json"
+            }
+            
+            payload = {
+                "model": model,
+                "messages": messages,
+                "stream": stream
+            }
+            
+            r = requests.post(
+                url=url,
+                headers=headers,
+                json=payload,
+                stream=stream
+            )
+            
+            r.raise_for_status()
+            
+            if stream:
+                def stream_generator():
+                    for line in r.iter_lines():
+                        if not line:
+                            continue
+                        
+                        # Decode bytes to string    
+                        line = line.decode('utf-8')
+                        
+                        if line.startswith('data: '):
+                            data = line[6:]
+                            if data == '[DONE]':
+                                break
+                                
+                            try:
+                                data_obj = json.loads(data)
+                                content = data_obj["choices"][0]["delta"].get("content")
+                                if content:
+                                    # Return the line in the expected format
+                                    yield f"data: {json.dumps({'choices': [{'delta': {'content': content}}]})}\n\n".encode()
+                            except json.JSONDecodeError:
+                                pass
+                return stream_generator()
+            else:
+                response = r.json()
+                return response.get("choices", [{}])[0].get("message", {}).get("content", "")
+                
+        except Exception as e:
+            error_msg = f"Error in OpenRouter request: {e}"
+            if stream:
+                error_notification = {
+                    "id": "error-chunk",
+                    "object": "chat.completion.chunk",
+                    "choices": [{
+                        "delta": {
+                            "content": error_msg
+                        },
+                        "index": 0,
+                        "finish_reason": "error"
+                    }]
+                }
+                # 創建一個迭代器來模擬流式回應
+                def error_stream():
+                    yield f"data: {json.dumps(error_notification)}\n\n".encode()
+                return error_stream()
+            else:
+                return error_msg
+
     def process_sequence(self, sequence_func, stream: bool = None):
         """
         抽象的请求序列处理器 - 更简单的实现
@@ -89,27 +165,36 @@ class Pipeline:
         
         # 存储请求历史
         request_history = []
+        request_types = []  # 存储每个请求的类型（ollama 或 openrouter）
         
         # 定义非流式请求函数
-        def complete_request(messages):
+        def complete_request(messages, request_type='ollama'):
             # 保存请求以便后续重放
             request_history.append(messages)
+            request_types.append(request_type)
             
             # 执行请求并返回结果
-            return self._ollama_request(messages, stream=False)
+            if request_type == 'openrouter':
+                return self._openrouter_request(messages, stream=False)
+            else:
+                return self._ollama_request(messages, stream=False)
         
         # 首先以非流式模式执行序列函数
         results = []
         
         # 修改 complete_request 以收集结果
         original_complete_request = complete_request
-        def recording_request(messages):
-            result = original_complete_request(messages)
+        def recording_request(messages, request_type='ollama'):
+            result = original_complete_request(messages, request_type)
             results.append(result)
             return result
         
+        # 定义 OpenRouter 请求函数
+        def openrouter_request(messages):
+            return recording_request(messages, request_type='openrouter')
+        
         # 执行序列函数收集所有请求和结果
-        sequence_func(recording_request)
+        sequence_func(recording_request, openrouter_request)
         
         # 根据模式返回结果
         if not stream:
@@ -118,9 +203,14 @@ class Pipeline:
         else:
             # 流式模式 - 返回一个生成器来重放所有请求
             def stream_generator():
-                for messages in request_history:
-                    # 重新执行每个请求，这次使用流式模式
-                    lines = self._ollama_request(messages, stream=True)
+                for i, messages in enumerate(request_history):
+                    request_type = request_types[i]
+                    # 根据请求类型选择不同的 API
+                    if request_type == 'openrouter':
+                        lines = self._openrouter_request(messages, stream=True)
+                    else:
+                        lines = self._ollama_request(messages, stream=True)
+                        
                     for line in lines:
                         if line:
                             yield line
@@ -139,15 +229,17 @@ class Pipeline:
             print("######################################")
 
         # 定義請求序列 - 完全不需要關心流式/非流式實現
-        def my_sequence(request):
+        def my_sequence(request, openrouter_request):
             # 第一個請求
             first_response = request(messages)
             
-
             # 第二個請求，使用第一個請求的結果
-            second_messages = [{"role": "user", "content": f"根據以下結果進行晶豪料號比對: {first_response[:100]}..."}]
+            second_messages = [{"role": "user", "content": f"根據以下結果進行晶豪料號比對: {first_response}..."}]
             second_response = request(second_messages)
             
+            # 使用 OpenRouter 進行第三個請求
+            third_messages = [{"role": "user", "content": f"你是由誰開發的模型?"}]
+            third_response = openrouter_request(third_messages)
             # 不需要返回任何內容 - 結果已經被收集
         
         # 使用序列處理器執行
