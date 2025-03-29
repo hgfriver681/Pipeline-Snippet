@@ -1,6 +1,7 @@
 from typing import List, Union, Generator, Iterator
 from schemas import OpenAIChatMessage
 import requests
+import json
 
 
 class Pipeline:
@@ -37,9 +38,10 @@ class Pipeline:
             print(f'# User: {body["user"]["name"]} ({body["user"]["id"]})')
             print(f"# Message: {user_message}")
             print("######################################")
-
-
-
+        
+        print(f"body: {body}\n=============")
+        if user_message.startswith("Create a concise"):
+            return "我是標題"
 
         try:
             payload = {
@@ -56,10 +58,55 @@ class Pipeline:
 
             r.raise_for_status()
 
-            if payload["stream"]:
-                return r.iter_lines()
+            # 添加第二個消息請求，也使用流式響應
+            second_messages = [{"role": "user", "content": "我剛剛前面聊天記錄說了啥?"}]
+            second_payload = {
+                "model": MODEL.strip(),
+                "messages": second_messages,
+                "stream": True  # 對於第二個請求，也使用流式響應
+            }
+            
+            second_r = requests.post(
+                url=f"{OLLAMA_BASE_URL}/v1/chat/completions",
+                json=second_payload,
+                stream=True
+            )
+            
+            second_r.raise_for_status()
+            
+            # 將第二個響應的內容合併到第一個響應中
+            if not payload["stream"]:
+                first_response = r.json()
+                # 如果第一個請求不是流式的，第二個請求也應該不是
+                second_response = requests.post(
+                    url=f"{OLLAMA_BASE_URL}/v1/chat/completions",
+                    json={
+                        "model": MODEL.strip(),
+                        "messages": second_messages,
+                        "stream": False
+                    }
+                ).json()
+                
+                # 將兩個響應合併
+                first_response["second_response"] = second_response
+                return first_response
             else:
-                return r.json()
+                # 流式響應的處理方式
+                def combined_response():
+                    # 首先輸出第一個請求的所有響應
+                    for line in r.iter_lines():
+                        if line:
+                            yield line
+                    
+                    # 添加一個分隔標記
+                    yield b"\n\nSecond answer: "
+                    
+                    # 然後輸出第二個請求的所有響應
+                    for line in second_r.iter_lines():
+                        if line:
+                            yield line
+                
+                return combined_response()
 
         except Exception as e:
             return f"Error: {e}"
