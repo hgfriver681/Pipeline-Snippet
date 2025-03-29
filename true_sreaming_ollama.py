@@ -58,56 +58,76 @@ class Pipeline:
 
             r.raise_for_status()
 
-            # 添加第二個消息請求，也使用流式響應
-            second_messages = [{"role": "user", "content": "我剛剛前面聊天記錄說了啥?"}]
-            second_payload = {
-                "model": MODEL.strip(),
-                "messages": second_messages,
-                "stream": True  # 對於第二個請求，也使用流式響應
-            }
-            
-            second_r = requests.post(
-                url=f"{OLLAMA_BASE_URL}/v1/chat/completions",
-                json=second_payload,
-                stream=True
-            )
-            
-            second_r.raise_for_status()
-            
-            # 將第二個響應的內容合併到第一個響應中
+            # Handle response based on streaming mode
             if not payload["stream"]:
+                # For non-streaming requests, get the complete response
                 first_response = r.json()
-                # 如果第一個請求不是流式的，第二個請求也應該不是
+                print("First response complete:", first_response)
+                
+                # Make second request after first is complete
+                second_messages = [{"role": "user", "content": "我剛剛前面聊天記錄說了啥?"}]
+                second_payload = {
+                    "model": MODEL.strip(),
+                    "messages": second_messages,
+                    "stream": False
+                }
+                
                 second_response = requests.post(
                     url=f"{OLLAMA_BASE_URL}/v1/chat/completions",
-                    json={
-                        "model": MODEL.strip(),
-                        "messages": second_messages,
-                        "stream": False
-                    }
+                    json=second_payload
                 ).json()
                 
-                # 將兩個響應合併
+                # Combine responses
                 first_response["second_response"] = second_response
                 return first_response
             else:
-                # 流式響應的處理方式
+                # For streaming requests
                 def combined_response():
-                    # 首先輸出第一個請求的所有響應
+                    # Collect all content from first response
+                    first_response_content = ""
+                    
+                    # Process and yield first response
                     for line in r.iter_lines():
                         if line:
                             yield line
+                            
+                            # Try to extract the content to build complete response
+                            try:
+                                data = json.loads(line.decode('utf-8').replace('data: ', ''))
+                                if 'choices' in data and len(data['choices']) > 0:
+                                    if 'delta' in data['choices'][0] and 'content' in data['choices'][0]['delta']:
+                                        first_response_content += data['choices'][0]['delta']['content']
+                            except:
+                                pass
                     
-                    # 添加一個分隔標記
+                    # Print the complete first response content
+                    print("First response complete content:", first_response_content)
+                    
+                    # Make second request after first is complete
+                    second_messages = [{"role": "user", "content": f"{first_response_content}\n\n以上說了啥?"}]
+                    second_payload = {
+                        "model": MODEL.strip(),
+                        "messages": second_messages,
+                        "stream": True
+                    }
+                    
+                    second_r = requests.post(
+                        url=f"{OLLAMA_BASE_URL}/v1/chat/completions",
+                        json=second_payload,
+                        stream=True
+                    )
+                    
+                    second_r.raise_for_status()
+                    
+                    # Add a separator between responses
                     yield b"\n\nSecond answer: "
                     
-                    # 然後輸出第二個請求的所有響應
+                    # Process and yield second response
                     for line in second_r.iter_lines():
                         if line:
                             yield line
                 
                 return combined_response()
-
+        
         except Exception as e:
             return f"Error: {e}"
-
