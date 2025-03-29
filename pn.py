@@ -102,6 +102,13 @@ class Pipeline:
         print(f"body: {body}\n=============")
         if user_message.startswith("Create a concise"):
             return "我是標題"
+        
+        if "You are an autocompletion system" in user_message:
+            return ""
+        
+
+        
+        
 
         try:
   
@@ -277,7 +284,7 @@ the printed get_filtered_products function should be between the tag <get_filter
 
                 filtered_products = get_filtered_products(**filtered_params)
                 print(f"filtered_products: {filtered_products}")
-                yield f"\n\n### Found {len(filtered_products)} potential matching products\n\nDecoding product information...\n\n"
+                yield f"\n\n### Found {filtered_products['total_matches']} potential matching products\n\nDecoding product information...\n\n"
  
                 #------------------------------------------
 
