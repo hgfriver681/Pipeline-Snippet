@@ -44,90 +44,98 @@ class Pipeline:
             return "我是標題"
 
         try:
-            payload = {
-                "model": MODEL.strip(),
-                "messages": messages, 
-                "stream": body.get("stream", True)
-            }
+  
 
-            r = requests.post(
-                url=f"{OLLAMA_BASE_URL}/v1/chat/completions",
-                json=payload,
-                stream=payload["stream"]
-            )
+            def combined_response():
+                #--------------------- first start ---------------------
+                payload = {
+                    "model": MODEL.strip(),
+                    "messages": messages, 
+                    "stream": True
+                }
 
-            r.raise_for_status()
+                r = requests.post(
+                    url=f"{OLLAMA_BASE_URL}/v1/chat/completions",
+                    json=payload,
+                    stream=payload["stream"]
+                )
 
-            # Handle response based on streaming mode
-            if not payload["stream"]:
-                # For non-streaming requests, get the complete response
-                first_response = r.json()
-                print("First response complete:", first_response)
+                r.raise_for_status()
+
+
+                # Collect and process first response
+                first_response_content = ""
                 
-                # Make second request after first is complete
-                second_messages = [{"role": "user", "content": "我剛剛前面聊天記錄說了啥?"}]
+                # Process first response and collect content
+                for chunk in self.process_llm_response(r):
+                    yield chunk
+                    
+                    # Extract content from chunk
+                    content = self.extract_content_from_chunk(chunk)
+                    if content:
+                        first_response_content += content
+                
+                # Print the complete first response content
+                print("First response complete content:", first_response_content)
+
+                #--------------------- first end ---------------------
+                
+                # 顯示字串在UI (注意: 顯示的字串會含在聊天記錄中)
+                yield """\n\n## 注意: 我是一段要被顯示在UI上的字串!!!我會含在聊天記錄中\n\n""" # 記得\n\n 要加在字串後面, 否則 markdown 語法會傳到後面字串
+                yield "\n\n### Second answer:\n\n"
+                yield "\n\n River is 24 years old\n\n"
+                
+                #--------------------- second start ---------------------
+                second_messages = [{"role": "user", "content": f"{first_response_content}\n\n以上说了啥?"}]
+
                 second_payload = {
                     "model": MODEL.strip(),
                     "messages": second_messages,
-                    "stream": False
+                    "stream": True
                 }
                 
-                second_response = requests.post(
+                second_r = requests.post(
                     url=f"{OLLAMA_BASE_URL}/v1/chat/completions",
-                    json=second_payload
-                ).json()
+                    json=second_payload,
+                    stream=True
+                )
                 
-                # Combine responses
-                first_response["second_response"] = second_response
-                return first_response
-            else:
-                # For streaming requests
-                def combined_response():
-                    # Collect all content from first response
-                    first_response_content = ""
-                    
-                    # Process and yield first response
-                    for line in r.iter_lines():
-                        if line:
-                            yield line
-                            
-                            # Try to extract the content to build complete response
-                            try:
-                                data = json.loads(line.decode('utf-8').replace('data: ', ''))
-                                if 'choices' in data and len(data['choices']) > 0:
-                                    if 'delta' in data['choices'][0] and 'content' in data['choices'][0]['delta']:
-                                        first_response_content += data['choices'][0]['delta']['content']
-                            except:
-                                pass
-                    
-                    # Print the complete first response content
-                    print("First response complete content:", first_response_content)
-                    
-                    # Make second request after first is complete
-                    second_messages = [{"role": "user", "content": f"{first_response_content}\n\n以上說了啥?"}]
-                    second_payload = {
-                        "model": MODEL.strip(),
-                        "messages": second_messages,
-                        "stream": True
-                    }
-                    
-                    second_r = requests.post(
-                        url=f"{OLLAMA_BASE_URL}/v1/chat/completions",
-                        json=second_payload,
-                        stream=True
-                    )
-                    
-                    second_r.raise_for_status()
-                    
-                    # Add a separator between responses
-                    yield b"\n\nSecond answer: "
-                    
-                    # Process and yield second response
-                    for line in second_r.iter_lines():
-                        if line:
-                            yield line
+                second_r.raise_for_status()
+
+                second_response_content = ""
                 
-                return combined_response()
+                # Process first response and collect content
+                for chunk in self.process_llm_response(second_r):
+                    yield chunk
+                    
+                    # Extract content from chunk
+                    content = self.extract_content_from_chunk(chunk)
+                    if content:
+                        second_response_content += content
+                
+                # Print the complete first response content
+                print("Second response complete content:", second_response_content)
+                #--------------------- second end ---------------------
+            
+            return combined_response()
         
         except Exception as e:
             return f"Error: {e}"
+    
+    def process_llm_response(self, response):
+        """Process a streaming LLM response and yield each chunk."""
+        for line in response.iter_lines():
+            if line:
+                yield line
+    
+    def extract_content_from_chunk(self, chunk):
+        """Extract text content from a response chunk."""
+        try:
+            data = json.loads(chunk.decode('utf-8').replace('data: ', ''))
+            if 'choices' in data and len(data['choices']) > 0:
+                if 'delta' in data['choices'][0] and 'content' in data['choices'][0]['delta']:
+                    return data['choices'][0]['delta']['content']
+        except:
+            pass
+        return ""
+    
