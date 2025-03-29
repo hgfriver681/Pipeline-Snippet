@@ -90,7 +90,8 @@ class Pipeline:
         print(f"pipe:{__name__}")
 
         OLLAMA_BASE_URL = "http://ollama:11434"
-        MODEL = "qwen2.5:latest "
+        # MODEL = "qwen2.5:latest"
+        MODEL = "qwen2.5-32b-20k:latest"
 
         if "user" in body:
             print("######################################")
@@ -271,9 +272,11 @@ the printed get_filtered_products function should be between the tag <get_filter
                 #yield f"\n\n### Summary of Google search results:\n\n{llm_params_response}\n\n"
                 
                 # Extract parameters from the LLM response
+                print(f"llm_params_response: {llm_params_response}")
                 filtered_params = self.extract_function_call(llm_params_response)
 
                 filtered_products = get_filtered_products(**filtered_params)
+                print(f"filtered_products: {filtered_products}")
                 yield f"\n\n### Found {len(filtered_products)} potential matching products\n\nDecoding product information...\n\n"
  
                 #------------------------------------------
